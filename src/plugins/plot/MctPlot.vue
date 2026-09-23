@@ -201,6 +201,8 @@ import MctTicks from './MctTicks.vue';
 
 const OFFSET_THRESHOLD = 10;
 const AXES_PADDING = 20;
+// Keep enough representable values in a Y-axis range for tick generation.
+const MIN_Y_AXIS_RANGE_ULPS = 16;
 
 export default {
   components: {
@@ -1495,10 +1497,11 @@ export default {
         this.yAxisListWithRange.forEach((yAxis) => {
           const yStartPosition = this.getYPositionForYAxis(this.marquee.start, yAxis);
           const yEndPosition = this.getYPositionForYAxis(this.marquee.end, yAxis);
-          yAxis.set('displayRange', {
+          const displayRange = {
             min: Math.min(yStartPosition, yEndPosition),
             max: Math.max(yStartPosition, yEndPosition)
-          });
+          };
+          yAxis.set('displayRange', this.clampYAxisRange(yAxis, displayRange));
         });
         this.userViewportChangeEnd();
       } else {
@@ -1565,10 +1568,11 @@ export default {
           }
 
           const yAxisDist = (currentYaxis.max - currentYaxis.min) * zoomFactor;
-          yAxisModel.set('displayRange', {
+          const displayRange = {
             min: currentYaxis.min + yAxisDist,
             max: currentYaxis.max - yAxisDist
-          });
+          };
+          yAxisModel.set('displayRange', this.clampYAxisRange(yAxisModel, displayRange));
         });
       } else if (zoomDirection === 'out') {
         this.config.xAxis.set('displayRange', {
@@ -1591,6 +1595,50 @@ export default {
       }
 
       this.userViewportChangeEnd();
+    },
+
+    clampYAxisRange(yAxisModel, range) {
+      if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max)) {
+        return range;
+      }
+
+      const stats = yAxisModel.get('stats');
+      const configuredRange = yAxisModel.get('range');
+      const statsMagnitude = Math.max(
+        Number.isFinite(stats?.min) ? Math.abs(stats.min) : 0,
+        Number.isFinite(stats?.max) ? Math.abs(stats.max) : 0
+      );
+      const configuredRangeMagnitude = Math.max(
+        Number.isFinite(configuredRange?.min) ? Math.abs(configuredRange.min) : 0,
+        Number.isFinite(configuredRange?.max) ? Math.abs(configuredRange.max) : 0
+      );
+      const rangeMagnitude = Math.max(Math.abs(range.min), Math.abs(range.max));
+      const hasStats = Number.isFinite(stats?.min) && Number.isFinite(stats?.max);
+      const needsFallbackMagnitude =
+        (hasStats && statsMagnitude === 0 && configuredRangeMagnitude === 0) ||
+        (!hasStats && configuredRangeMagnitude === 0);
+      const precisionMagnitude = Math.max(
+        statsMagnitude,
+        configuredRangeMagnitude,
+        rangeMagnitude,
+        needsFallbackMagnitude ? 1 : 0
+      );
+      const minimumSpan = Math.max(
+        precisionMagnitude * Number.EPSILON * MIN_Y_AXIS_RANGE_ULPS,
+        Number.MIN_VALUE * MIN_Y_AXIS_RANGE_ULPS
+      );
+      const span = range.max - range.min;
+
+      if (!Number.isFinite(span) || span >= minimumSpan) {
+        return range;
+      }
+
+      const center = range.min + span / 2;
+
+      return {
+        min: center - minimumSpan / 2,
+        max: center + minimumSpan / 2
+      };
     },
 
     wheelZoom(event) {
@@ -1655,10 +1703,11 @@ export default {
           let yAxisMaxDist = yDistMouseToMax / yAxisDist;
           let yAxisMinDist = yDistMouseToMin / yAxisDist;
 
-          yAxisModel.set('displayRange', {
+          const displayRange = {
             min: yDisplayRange.min + yAxisDist * ZOOM_AMT * yAxisMinDist,
             max: yDisplayRange.max - yAxisDist * ZOOM_AMT * yAxisMaxDist
-          });
+          };
+          yAxisModel.set('displayRange', this.clampYAxisRange(yAxisModel, displayRange));
         });
       } else if (event.wheelDelta >= 0) {
         this.config.xAxis.set('displayRange', {
@@ -1927,3 +1976,4 @@ export default {
   }
 };
 </script>
+
